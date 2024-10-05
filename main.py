@@ -3,6 +3,13 @@ from __future__ import annotations
 import sys
 from abc import ABC
 from dataclasses import dataclass
+from enum import Enum
+from typing import Any
+
+
+def debug_print(*args: Any, **kwargs: Any) -> None:
+    print(*args, file=sys.stderr, **kwargs)
+
 
 BuildingId = int
 AstronautType = int
@@ -108,36 +115,138 @@ class LunarMonthData:
         return self
 
 
-def test_starter_code() -> None:
-    buffer = BufferedInputSource()
-    resources = int(buffer.append(input()))
-    num_travel_routes = int(buffer.append(input()))
-    building_connections = []
-    for i in range(num_travel_routes):
-        building_id_1, building_id_2, capacity = [
-            int(j) for j in buffer.append(input()).split()
-        ]
-        building_connections.append((building_id_1, building_id_2, capacity))
-    num_pods = int(buffer.append(input()))
-    all_pod_properties = []
-    for i in range(num_pods):
-        pod_properties = buffer.append(input())
-        all_pod_properties.append(pod_properties)
-    num_new_buildings = int(buffer.append(input()))
-    all_building_properties = []
-    for i in range(num_new_buildings):
-        building_properties = buffer.append(input())
-        all_building_properties.append(building_properties)
+class ActionType(Enum):
+    TUBE = "TUBE"
+    UPGRADE = "UPGRADE"
+    TELEPORT = "TELEPORT"
+    POD = "POD"
+    DESTROY = "DESTROY"
+    WAIT = "WAIT"
 
-    data = LunarMonthData.parse_from_input(buffer)
-    assert data.resources == resources
-    assert len(data.transport_lines) == len(building_connections)
-    assert len(data.pod_properties) == len(all_pod_properties)
-    assert len(data.module_properties) == len(all_building_properties)
+
+class LunarDayAction:
+    def __init__(self, type: ActionType) -> None:
+        self.type = type
+
+
+class CreateTube(LunarDayAction):
+    """
+    Cost is 1 resource per 0.1 km rounded down.
+    """
+
+    def __init__(self, building_id_1: BuildingId, building_id_2: BuildingId) -> None:
+        super().__init__(ActionType.TUBE)
+        self.building_id_1 = building_id_1
+        self.building_id_2 = building_id_2
+
+    def __str__(self) -> str:
+        return f"{self.type.value} {self.building_id_1} {self.building_id_2}"
+
+
+class UpgradeTube(LunarDayAction):
+    """
+    Cost is initial cost * new capacity.
+    """
+
+    def __init__(self, building_id_1: BuildingId, building_id_2: BuildingId) -> None:
+        super().__init__(ActionType.UPGRADE)
+        self.building_id_1 = building_id_1
+        self.building_id_2 = building_id_2
+
+    def __str__(self) -> str:
+        return f"{self.type.value} {self.building_id_1} {self.building_id_2}"
+
+
+@dataclass
+class Teleport(LunarDayAction):
+    """
+    Cost is 5000
+    """
+
+    def __init__(
+        self, building_id_entrance: BuildingId, building_id_exit: BuildingId
+    ) -> None:
+        super().__init__(ActionType.TELEPORT)
+        self.building_id_entrance = building_id_entrance
+        self.building_id_exit = building_id_exit
+
+    def __str__(self) -> str:
+        return f"{self.type.value} {self.building_id_entrance} {self.building_id_exit}"
+
+
+@dataclass
+class CreatePod(LunarDayAction):
+    """
+    Cost is 1000
+    """
+
+    def __init__(self, pod_id: int, itinerary: list[BuildingId]) -> None:
+        super().__init__(ActionType.POD)
+        self.pod_id = pod_id
+        self.itinerary = itinerary
+
+    def __str__(self) -> str:
+        return f"{self.type.value} {self.pod_id} {' '.join([str(building_id) for building_id in self.itinerary])}"
+
+
+@dataclass
+class DestroyPod(LunarDayAction):
+    """
+    Get 750 resources back
+    """
+
+    def __init__(self, pod_id: int) -> None:
+        super().__init__(ActionType.DESTROY)
+        self.pod_id = pod_id
+
+    def __str__(self) -> str:
+        return f"{self.type.value} {self.pod_id}"
+
+
+@dataclass
+class Wait(LunarDayAction):
+    type: ActionType = ActionType.WAIT
+
+    def __str__(self) -> str:
+        return f"{self.type.value}"
+
+
+def send_actions(actions: list[LunarDayAction]) -> None:
+    if len(actions) == 0:
+        send_actions([Wait()])
+        return
+    print(";".join([f"{str(action)}" for action in actions]))
 
 
 def main() -> None:
-    test_starter_code()
+    tick = 0
+    schedule = [
+        [
+            CreateTube(0, 1),
+            CreateTube(0, 2),
+            CreatePod(42, [0, 1, 0, 2, 0, 1, 0, 2, 0, 1]),
+        ],
+        [],
+    ]
+    while True:
+        data = LunarMonthData.parse_from_input(LiveInputSource())
+        debug_print(f"Tick {tick}")
+        debug_print(data.resources)
+        if data.resources >= 5000 - 750 + 1000:
+            send_actions(
+                [
+                    Teleport(1, 2),
+                    DestroyPod(42),
+                    CreatePod(42, [0, 1, 0, 1, 0, 1]),
+                ]
+            )
+        else:
+            try:
+                actions = schedule.pop(0)
+            except IndexError:
+                actions = []
+            send_actions(actions)
+        tick += 1
 
 
 if __name__ == "__main__":
