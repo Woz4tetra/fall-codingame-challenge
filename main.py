@@ -21,17 +21,27 @@ class TransportLine:
     building_id_2: BuildingId
     capacity: int
 
+    def __post_init__(self) -> None:
+        debug_print(f"TransportLine: {self.building_id_1} {self.building_id_2} capacity:{self.capacity}")
+
 
 @dataclass
 class Pod:
     pod_id: int
     itinerary: list[BuildingId]
 
+    def __post_init__(self) -> None:
+        debug_print(f"Pod: {self.pod_id} itinerary: {self.itinerary}")
+
 
 @dataclass
 class Module:
     type: AstronautType
+    id: BuildingId
     coordinates: tuple[int, int]
+
+    def __post_init__(self) -> None:
+        debug_print(f"Module: {self.type} coordinates: {self.coordinates}")
 
 
 @dataclass
@@ -45,6 +55,9 @@ LANDING_PAD_ID = 0
 @dataclass
 class LandingPad(Module):
     astronauts: list[Astronaut]
+
+    def __post_init__(self) -> None:
+        debug_print(f"LandingPad: {self.type} coordinates: {self.coordinates} astronauts: {self.astronauts}")
 
 
 class InputSource(ABC):
@@ -72,8 +85,8 @@ class BufferedInputSource(InputSource):
 class LunarMonthData:
     resources: int
     transport_lines: list[TransportLine]
-    pod_properties: list[Pod]
-    module_properties: list[Module]
+    pods: list[Pod]
+    buildings: list[Module]
 
     @classmethod
     def parse_from_input(cls, input_source: InputSource) -> LunarMonthData:
@@ -87,30 +100,34 @@ class LunarMonthData:
             transport_lines.append(
                 TransportLine(building_id_1, building_id_2, capacity)
             )
+
         num_pods = int(input_source.next_line())
-        all_pod_properties = []
+        pods = []
         for i in range(num_pods):
             pod_properties = input_source.next_line().split()
             pod_id = int(pod_properties[0])
             itinerary = [int(item) for item in pod_properties[2:]]
-            all_pod_properties.append(Pod(pod_id, itinerary))
+            pods.append(Pod(pod_id, itinerary))
 
         num_new_buildings = int(input_source.next_line())
-        all_module_properties = []
+        buildings = []
         for i in range(num_new_buildings):
             module_properties = input_source.next_line().split()
-            astronaut_type = int(module_properties[0])
-            coordinates = int(module_properties[1]), int(module_properties[2])
-            if astronaut_type == LANDING_PAD_ID:
+            building_type = int(module_properties[0])
+            module_id = int(module_properties[1])
+            coordinates = int(module_properties[2]), int(module_properties[3])
+            if building_type == LANDING_PAD_ID:
+                num_astronauts = int(module_properties[4])
                 astronauts = [
-                    Astronaut(int(a_type)) for a_type in module_properties[3:]
+                    Astronaut(int(a_type)) for a_type in module_properties[5:]
                 ]
-                module = LandingPad(astronaut_type, coordinates, astronauts)
+                module = LandingPad(building_type, module_id, coordinates, astronauts)
             else:
-                module = Module(astronaut_type, coordinates)
-            all_module_properties.append(module)
+                module = Module(building_type, module_id, coordinates)
+            buildings.append(module)
+
         self = cls(
-            resources, transport_lines, all_pod_properties, all_module_properties
+            resources, transport_lines, pods, buildings
         )
         return self
 
