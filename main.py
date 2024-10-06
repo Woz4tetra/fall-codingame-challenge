@@ -13,6 +13,9 @@ def debug_print(*args: Any, **kwargs: Any) -> None:
 
 BuildingId = int
 AstronautType = int
+BuildingType = int
+
+LANDING_PAD_BUILDING_TYPE = 0
 
 
 @dataclass
@@ -36,7 +39,7 @@ class Pod:
 
 @dataclass
 class Module:
-    type: AstronautType
+    type: BuildingType
     id: BuildingId
     coordinates: tuple[int, int]
 
@@ -49,7 +52,6 @@ class Astronaut:
     type: AstronautType
 
 
-LANDING_PAD_ID = 0
 
 
 @dataclass
@@ -116,7 +118,7 @@ class LunarMonthData:
             building_type = int(module_properties[0])
             module_id = int(module_properties[1])
             coordinates = int(module_properties[2]), int(module_properties[3])
-            if building_type == LANDING_PAD_ID:
+            if building_type == LANDING_PAD_BUILDING_TYPE:
                 num_astronauts = int(module_properties[4])
                 astronauts = [
                     Astronaut(int(a_type)) for a_type in module_properties[5:]
@@ -238,31 +240,20 @@ def send_actions(actions: list[LunarDayAction]) -> None:
 def main() -> None:
     tick = 0
     schedule = [
-        [
-            CreateTube(0, 1),
-            CreateTube(0, 2),
-            CreatePod(42, [0, 1, 0, 2, 0, 1, 0, 2, 0, 1]),
-        ],
         [],
     ]
     while True:
         data = LunarMonthData.parse_from_input(LiveInputSource())
         debug_print(f"Tick {tick}")
         debug_print(data.resources)
-        if data.resources >= 5000 - 750 + 1000:
-            send_actions(
-                [
-                    Teleport(1, 2),
-                    DestroyPod(42),
-                    CreatePod(42, [0, 1, 0, 1, 0, 1]),
-                ]
-            )
-        else:
-            try:
-                actions = schedule.pop(0)
-            except IndexError:
-                actions = []
-            send_actions(actions)
+        debug_print(data.transport_lines)
+        
+        
+        try:
+            actions = schedule.pop(0)
+        except IndexError:
+            actions = []
+        send_actions(actions)
         tick += 1
 
 
