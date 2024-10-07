@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import math
 import sys
+import scipy
 from abc import ABC
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
-
+import numpy as np
 
 def debug_print(*args: Any, **kwargs: Any) -> None:
     print(*args, file=sys.stderr, **kwargs)
@@ -26,10 +27,6 @@ class TransportLine:
     building_id_2: BuildingId
     capacity: int
 
-    def __post_init__(self) -> None:
-        debug_print(
-            f"TransportLine: {self.building_id_1} {self.building_id_2} capacity:{self.capacity}"
-        )
 
 
 @dataclass
@@ -38,8 +35,6 @@ class Pod:
     itinerary: list[BuildingId]
     capacity: int = 10
 
-    def __post_init__(self) -> None:
-        debug_print(f"Pod: {self.pod_id} itinerary: {self.itinerary}")
 
 
 @dataclass
@@ -47,9 +42,6 @@ class Module:
     type: BuildingType
     id: BuildingId
     coordinates: tuple[int, int]
-
-    def __post_init__(self) -> None:
-        debug_print(f"Module: {self.type} coordinates: {self.coordinates}")
 
 
 @dataclass
@@ -61,11 +53,6 @@ class Astronaut:
 class LandingPad(Module):
     astronauts: list[Astronaut]
     astronauts_type_map: dict[AstronautType, list[Astronaut]]
-
-    def __post_init__(self) -> None:
-        debug_print(
-            f"LandingPad: {self.type} coordinates: {self.coordinates} astronauts: {self.astronauts}"
-        )
 
 
 class InputSource(ABC):
@@ -89,16 +76,20 @@ class BufferedInputSource(InputSource):
         return self.buffer.pop(0)
 
 
-@dataclass
 class LunarMonthData:
-    resources: int
-    transport_lines: list[TransportLine]
-    pods: list[Pod]
-    buildings: list[Module]
-    buildings_type_map: dict[BuildingType, list[Module]]
 
-    @classmethod
-    def parse_from_input(cls, input_source: InputSource) -> LunarMonthData:
+    def __init__(self, resources: int, transport_lines: list[TransportLine], pods: list[Pod]) -> None:
+        self.resources = resources
+        self.transport_lines = transport_lines
+        self.pods = pods
+
+        self.buildings: list[Module] = []
+        self.buildings_type_map: dict[BuildingType, list[Module]] = {}
+
+
+
+
+    def update_from_input(self, input_source: InputSource) -> LunarMonthData:
         resources = int(input_source.next_line())
         num_travel_routes = int(input_source.next_line())
         transport_lines = []
@@ -119,8 +110,6 @@ class LunarMonthData:
             pods.append(Pod(pod_id, itinerary))
 
         num_new_buildings = int(input_source.next_line())
-        buildings = []
-        buildings_type_map: dict[BuildingType, list[Module]] = {}
         for i in range(num_new_buildings):
             module_properties = input_source.next_line().split()
             building_type = int(module_properties[0])
@@ -146,13 +135,18 @@ class LunarMonthData:
             else:
                 module = Module(building_type, module_id, coordinates)
 
-            buildings.append(module)
-            if building_type not in buildings_type_map:
-                buildings_type_map[building_type] = []
-            buildings_type_map[building_type].append(module)
+            self.buildings.append(module)
+            if building_type not in self.buildings_type_map:
+                self.buildings_type_map[building_type] = []
+            self.buildings_type_map[building_type].append(module)
 
-        self = cls(resources, transport_lines, pods, buildings, buildings_type_map)
+            self.transport_lines = transport_lines
+            self.resources = resources
+            self.pods = pods
+
         return self
+
+
 
 
 class ActionType(Enum):
@@ -272,59 +266,69 @@ def send_actions(actions: list[LunarDayAction]) -> None:
         return
     print(";".join([f"{str(action)}" for action in actions]))
 
+@dataclass
+class Map:
+    graph: int # TODO
+    state: LunarMonthData
+
 
 def main() -> None:
     tick = 0
     schedule = []
+    
+    map = Map(graph=0, state=LunarMonthData(resources=0, transport_lines=[], pods=[]))
+
     while True:
-        data = LunarMonthData.parse_from_input(LiveInputSource())
+        data = map.state.update_from_input(LiveInputSource())
         debug_print(f"Tick {tick}")
         debug_print(data.resources)
         debug_print(data.transport_lines)
 
-        """
-        TODO we need to remember the old buildings too
-        """
-
         actions = []
 
-        if len(data.buildings_type_map) > 0:
-            landing_pads = data.buildings_type_map[LANDING_PAD_BUILDING_TYPE]
 
-            # map of landing pad id to list of buildings its astronauts want to visit
-            target_buildings_map: dict[BuildingId, list[Module]] = {}
+        if tick == 0:
+            coordinates = np.array([building.coordinates for building in data.buildings], dtype=np.float64)
+            graph = scipy.spatial.Delaunay(coordinates)
 
-            routes_to_build: list[tuple[Module, Module]] = []
-            for landing_pad in landing_pads:
-                assert isinstance(landing_pad, LandingPad)
-                target_buildings_map[landing_pad.id] = []
-                for (
-                    astronaut_type,
-                    astronauts,
-                ) in landing_pad.astronauts_type_map.items():
-                    target_buildings_map[landing_pad.id].extend(
-                        data.buildings_type_map[astronaut_type]
-                    )
-                    for building in data.buildings_type_map[astronaut_type]:
-                        routes_to_build.append((landing_pad, building))
+            debug_print(f'graph {graph.simplices}')
 
-            debug_print(target_buildings_map)
-            debug_print(routes_to_build)
+            # landing_pads = data.buildings_type_map[LANDING_PAD_BUILDING_TYPE]
 
-            remaining_resources = data.resources
-            for idx, route in enumerate(routes_to_build):
-                action = CreateTube(route[0], route[1])
-                actions.append(action)
-                remaining_resources = remaining_resources - action.cost()
+            # # map of landing pad id to list of buildings its astronauts want to visit
+            # target_buildings_map: dict[BuildingId, list[Module]] = {}
 
-            debug_print(f"Remaining resources: {remaining_resources}")
+            # routes_to_build: list[tuple[Module, Module]] = []
+            # for landing_pad in landing_pads:
+            #     assert isinstance(landing_pad, LandingPad)
+            #     target_buildings_map[landing_pad.id] = []
+            #     for (
+            #         astronaut_type,
+            #         astronauts,
+            #     ) in landing_pad.astronauts_type_map.items():
+            #         target_buildings_map[landing_pad.id].extend(
+            #             data.buildings_type_map[astronaut_type]
+            #         )
+            #         for building in data.buildings_type_map[astronaut_type]:
+            #             routes_to_build.append((landing_pad, building))
+
+            # debug_print(target_buildings_map)
+            # debug_print(routes_to_build)
+
+            # remaining_resources = data.resources
+            # for idx, route in enumerate(routes_to_build):
+            #     action = CreateTube(route[0], route[1])
+            #     actions.append(action)
+            #     remaining_resources = remaining_resources - action.cost()
+
+            # debug_print(f"Remaining resources: {remaining_resources}")
 
             # start with one pod
-            if remaining_resources >= POD_COST:
-                itenerary = []
-                pod_action = CreatePod(1, itenerary)
-                remaining_resources = remaining_resources - POD_COST
-                actions.append(pod_action)
+            # if remaining_resources >= POD_COST:
+            #     itenerary = []
+            #     pod_action = CreatePod(1, itenerary)
+            #     remaining_resources = remaining_resources - POD_COST
+            #     actions.append(pod_action)
 
         schedule.append(actions)
 
