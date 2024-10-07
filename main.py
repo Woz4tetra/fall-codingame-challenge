@@ -1,13 +1,13 @@
 from __future__ import annotations
-
 import math
 import sys
-import scipy
+import scipy.spatial
 from abc import ABC
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 import numpy as np
+
 
 def debug_print(*args: Any, **kwargs: Any) -> None:
     print(*args, file=sys.stderr, **kwargs)
@@ -28,13 +28,11 @@ class TransportLine:
     capacity: int
 
 
-
 @dataclass
 class Pod:
     pod_id: int
     itinerary: list[BuildingId]
     capacity: int = 10
-
 
 
 @dataclass
@@ -77,19 +75,15 @@ class BufferedInputSource(InputSource):
 
 
 class LunarMonthData:
-
-    def __init__(self, resources: int, transport_lines: list[TransportLine], pods: list[Pod]) -> None:
-        self.resources = resources
-        self.transport_lines = transport_lines
-        self.pods = pods
+    def __init__(self) -> None:
+        self.resources = 0
+        self.transport_lines: list[TransportLine] = []
+        self.pods: list[Pod] = []
 
         self.buildings: list[Module] = []
         self.buildings_type_map: dict[BuildingType, list[Module]] = {}
 
-
-
-
-    def update_from_input(self, input_source: InputSource) -> LunarMonthData:
+    def update_from_input(self, input_source: InputSource) -> None:
         resources = int(input_source.next_line())
         num_travel_routes = int(input_source.next_line())
         transport_lines = []
@@ -143,10 +137,6 @@ class LunarMonthData:
             self.transport_lines = transport_lines
             self.resources = resources
             self.pods = pods
-
-        return self
-
-
 
 
 class ActionType(Enum):
@@ -266,32 +256,49 @@ def send_actions(actions: list[LunarDayAction]) -> None:
         return
     print(";".join([f"{str(action)}" for action in actions]))
 
-@dataclass
-class Map:
-    graph: int # TODO
-    state: LunarMonthData
 
+def get_path(Pr, i, j):
+    path = [j]
+    k = j
+    while Pr[i, k] != -9999:
+        path.append(Pr[i, k])
+        k = Pr[i, k]
+    return path[::-1]
+
+
+def build_adjacency_matrix(coordinates: np.ndarray) -> np.ndarray:
+    n = len(coordinates)
+    adjacency_matrix = np.zeros((n, n))
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            dist = np.linalg.norm(coordinates[i] - coordinates[j])
+            adjacency_matrix[i][j] = dist
+            adjacency_matrix[j][i] = dist
+
+    return adjacency_matrix
 
 def main() -> None:
     tick = 0
     schedule = []
-    
-    map = Map(graph=0, state=LunarMonthData(resources=0, transport_lines=[], pods=[]))
+
+    data = LunarMonthData()
 
     while True:
-        data = map.state.update_from_input(LiveInputSource())
+        data.update_from_input(LiveInputSource())
         debug_print(f"Tick {tick}")
         debug_print(data.resources)
         debug_print(data.transport_lines)
 
         actions = []
 
-
         if tick == 0:
-            coordinates = np.array([building.coordinates for building in data.buildings], dtype=np.float64)
+            coordinates = np.array(
+                [building.coordinates for building in data.buildings], dtype=np.float64
+            )
             graph = scipy.spatial.Delaunay(coordinates)
 
-            debug_print(f'graph {graph.simplices}')
+            debug_print(f"graph {graph.simplices}")
 
             # landing_pads = data.buildings_type_map[LANDING_PAD_BUILDING_TYPE]
 
