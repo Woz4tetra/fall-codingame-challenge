@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import sys
 from abc import ABC
 from dataclasses import dataclass
@@ -16,6 +17,7 @@ AstronautType = int
 BuildingType = int
 
 LANDING_PAD_BUILDING_TYPE = 0
+POD_COST = 1000
 
 
 @dataclass
@@ -25,13 +27,16 @@ class TransportLine:
     capacity: int
 
     def __post_init__(self) -> None:
-        debug_print(f"TransportLine: {self.building_id_1} {self.building_id_2} capacity:{self.capacity}")
+        debug_print(
+            f"TransportLine: {self.building_id_1} {self.building_id_2} capacity:{self.capacity}"
+        )
 
 
 @dataclass
 class Pod:
     pod_id: int
     itinerary: list[BuildingId]
+    capacity: int = 10
 
     def __post_init__(self) -> None:
         debug_print(f"Pod: {self.pod_id} itinerary: {self.itinerary}")
@@ -52,14 +57,15 @@ class Astronaut:
     type: AstronautType
 
 
-
-
 @dataclass
 class LandingPad(Module):
     astronauts: list[Astronaut]
+    astronauts_type_map: dict[AstronautType, list[Astronaut]]
 
     def __post_init__(self) -> None:
-        debug_print(f"LandingPad: {self.type} coordinates: {self.coordinates} astronauts: {self.astronauts}")
+        debug_print(
+            f"LandingPad: {self.type} coordinates: {self.coordinates} astronauts: {self.astronauts}"
+        )
 
 
 class InputSource(ABC):
@@ -89,6 +95,7 @@ class LunarMonthData:
     transport_lines: list[TransportLine]
     pods: list[Pod]
     buildings: list[Module]
+    buildings_type_map: dict[BuildingType, list[Module]]
 
     @classmethod
     def parse_from_input(cls, input_source: InputSource) -> LunarMonthData:
@@ -113,6 +120,7 @@ class LunarMonthData:
 
         num_new_buildings = int(input_source.next_line())
         buildings = []
+        buildings_type_map: dict[BuildingType, list[Module]] = {}
         for i in range(num_new_buildings):
             module_properties = input_source.next_line().split()
             building_type = int(module_properties[0])
@@ -123,14 +131,27 @@ class LunarMonthData:
                 astronauts = [
                     Astronaut(int(a_type)) for a_type in module_properties[5:]
                 ]
-                module = LandingPad(building_type, module_id, coordinates, astronauts)
+                astronauts_type_map: dict[AstronautType, list[Astronaut]] = {}
+                for astronaut in astronauts:
+                    if astronaut.type not in astronauts_type_map:
+                        astronauts_type_map[astronaut.type] = []
+                    astronauts_type_map[astronaut.type].append(astronaut)
+                module = LandingPad(
+                    building_type,
+                    module_id,
+                    coordinates,
+                    astronauts,
+                    astronauts_type_map,
+                )
             else:
                 module = Module(building_type, module_id, coordinates)
-            buildings.append(module)
 
-        self = cls(
-            resources, transport_lines, pods, buildings
-        )
+            buildings.append(module)
+            if building_type not in buildings_type_map:
+                buildings_type_map[building_type] = []
+            buildings_type_map[building_type].append(module)
+
+        self = cls(resources, transport_lines, pods, buildings, buildings_type_map)
         return self
 
 
@@ -153,10 +174,22 @@ class CreateTube(LunarDayAction):
     Cost is 1 resource per 0.1 km rounded down.
     """
 
-    def __init__(self, building_id_1: BuildingId, building_id_2: BuildingId) -> None:
+    def __init__(self, building_1: Module, building_2: Module) -> None:
         super().__init__(ActionType.TUBE)
-        self.building_id_1 = building_id_1
-        self.building_id_2 = building_id_2
+        self.building_1 = building_1
+        self.building_2 = building_2
+        self.building_id_1 = building_1.id
+        self.building_id_2 = building_2.id
+
+    def cost(self) -> int:
+        x1, y1 = self.building_1.coordinates
+        x2, y2 = self.building_2.coordinates
+        distance = math.sqrt(((x1 - x2) ** 2 + (y1 - y2) ** 2))
+        debug_print(
+            f"Distance: {distance} between {self.building_1.id} and {self.building_2.id} "
+            f"with coordinates {self.building_1.coordinates} and {self.building_2.coordinates}"
+        )
+        return math.floor(distance * 0.1)
 
     def __str__(self) -> str:
         return f"{self.type.value} {self.building_id_1} {self.building_id_2}"
@@ -204,6 +237,9 @@ class CreatePod(LunarDayAction):
         self.pod_id = pod_id
         self.itinerary = itinerary
 
+    def cost(self) -> int:
+        return 1000
+
     def __str__(self) -> str:
         return f"{self.type.value} {self.pod_id} {' '.join([str(building_id) for building_id in self.itinerary])}"
 
@@ -239,16 +275,59 @@ def send_actions(actions: list[LunarDayAction]) -> None:
 
 def main() -> None:
     tick = 0
-    schedule = [
-        [],
-    ]
+    schedule = []
     while True:
         data = LunarMonthData.parse_from_input(LiveInputSource())
         debug_print(f"Tick {tick}")
         debug_print(data.resources)
         debug_print(data.transport_lines)
-        
-        
+
+        """
+        TODO we need to remember the old buildings too
+        """
+
+        actions = []
+
+        if len(data.buildings_type_map) > 0:
+            landing_pads = data.buildings_type_map[LANDING_PAD_BUILDING_TYPE]
+
+            # map of landing pad id to list of buildings its astronauts want to visit
+            target_buildings_map: dict[BuildingId, list[Module]] = {}
+
+            routes_to_build: list[tuple[Module, Module]] = []
+            for landing_pad in landing_pads:
+                assert isinstance(landing_pad, LandingPad)
+                target_buildings_map[landing_pad.id] = []
+                for (
+                    astronaut_type,
+                    astronauts,
+                ) in landing_pad.astronauts_type_map.items():
+                    target_buildings_map[landing_pad.id].extend(
+                        data.buildings_type_map[astronaut_type]
+                    )
+                    for building in data.buildings_type_map[astronaut_type]:
+                        routes_to_build.append((landing_pad, building))
+
+            debug_print(target_buildings_map)
+            debug_print(routes_to_build)
+
+            remaining_resources = data.resources
+            for idx, route in enumerate(routes_to_build):
+                action = CreateTube(route[0], route[1])
+                actions.append(action)
+                remaining_resources = remaining_resources - action.cost()
+
+            debug_print(f"Remaining resources: {remaining_resources}")
+
+            # start with one pod
+            if remaining_resources >= POD_COST:
+                itenerary = []
+                pod_action = CreatePod(1, itenerary)
+                remaining_resources = remaining_resources - POD_COST
+                actions.append(pod_action)
+
+        schedule.append(actions)
+
         try:
             actions = schedule.pop(0)
         except IndexError:
