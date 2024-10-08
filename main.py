@@ -1,16 +1,31 @@
 from __future__ import annotations
-import math
+import json
 import sys
-import scipy.spatial
-from abc import ABC
-from dataclasses import dataclass
+import scipy.spatial  # type: ignore
+from abc import ABC, abstractmethod
+from dataclasses import asdict, dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, Callable
 import numpy as np
+
+from scipy.sparse.csgraph import shortest_path  # type: ignore
 
 
 def debug_print(*args: Any, **kwargs: Any) -> None:
     print(*args, file=sys.stderr, **kwargs)
+
+
+def _asdict_factory(data: Any) -> dict:
+    def convert_value(obj: Any) -> Any:
+        if isinstance(obj, Enum):
+            return obj.value
+        return obj
+
+    return dict((k, convert_value(v)) for k, v in data)
+
+
+def to_dict(obj: Any) -> dict:
+    return asdict(obj, dict_factory=_asdict_factory)
 
 
 BuildingId = int
@@ -27,12 +42,34 @@ class TransportLine:
     building_id_2: BuildingId
     capacity: int
 
+    def to_dict(self) -> dict:
+        return to_dict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> TransportLine:
+        return cls(
+            int(data["building_id_1"]),
+            int(data["building_id_2"]),
+            int(data["capacity"]),
+        )
+
 
 @dataclass
 class Pod:
     pod_id: int
     itinerary: list[BuildingId]
     capacity: int = 10
+
+    def to_dict(self) -> dict:
+        return to_dict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> Pod:
+        return cls(
+            int(data["pod_id"]),
+            [int(item) for item in data["itinerary"]],
+            int(data["capacity"]),
+        )
 
 
 @dataclass
@@ -41,19 +78,54 @@ class Module:
     id: BuildingId
     coordinates: tuple[int, int]
 
+    def to_dict(self) -> dict:
+        return to_dict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> Module:
+        return cls(
+            int(data["type"]),
+            int(data["id"]),
+            (int(data["coordinates"][0]), int(data["coordinates"][1])),
+        )
+
 
 @dataclass
 class Astronaut:
     type: AstronautType
 
+    def to_dict(self) -> dict:
+        return to_dict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> Astronaut:
+        return cls(int(data["type"]))
+
 
 @dataclass
 class LandingPad(Module):
     astronauts: list[Astronaut]
-    astronauts_type_map: dict[AstronautType, list[Astronaut]]
+
+    def __post_init__(self) -> None:
+        self.astronauts_type_map: dict[AstronautType, list[Astronaut]] = {
+            astronaut.type: [astronaut] for astronaut in self.astronauts
+        }
+
+    def to_dict(self) -> dict:
+        return to_dict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> LandingPad:
+        return cls(
+            int(data["type"]),
+            int(data["id"]),
+            (int(data["coordinates"][0]), int(data["coordinates"][1])),
+            [Astronaut(**a) for a in data["astronauts"]],
+        )
 
 
 class InputSource(ABC):
+    @abstractmethod
     def next_line(self) -> str: ...
 
 
@@ -64,7 +136,7 @@ class LiveInputSource(InputSource):
 
 class BufferedInputSource(InputSource):
     def __init__(self) -> None:
-        self.buffer = []
+        self.buffer: list[str] = []
 
     def append(self, line: str) -> str:
         self.buffer.append(line)
@@ -74,16 +146,36 @@ class BufferedInputSource(InputSource):
         return self.buffer.pop(0)
 
 
+@dataclass
 class LunarMonthData:
-    def __init__(self) -> None:
-        self.resources = 0
-        self.transport_lines: list[TransportLine] = []
-        self.pods: list[Pod] = []
+    resources: int = 0
+    transport_lines: list[TransportLine] = field(default_factory=list)
+    pods: list[Pod] = field(default_factory=list)
+    buildings: list[Module] = field(default_factory=list)
 
-        self.buildings: list[Module] = []
-        self.buildings_type_map: dict[BuildingType, list[Module]] = {}
+    def __post_init__(self) -> None:
+        self.buildings_by_type: dict[BuildingType, list[Module]] = {}
+        for building in self.buildings:
+            self.buildings_by_type.setdefault(building.type, []).append(building)
 
-    def update_from_input(self, input_source: InputSource) -> None:
+    def to_dict(self) -> dict:
+        return to_dict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> LunarMonthData:
+        return cls(
+            int(data["resources"]),
+            [TransportLine.from_dict(t) for t in data["transport_lines"]],
+            [Pod.from_dict(p) for p in data["pods"]],
+            [
+                LandingPad.from_dict(b)
+                if b["type"] == LANDING_PAD_BUILDING_TYPE
+                else Module.from_dict(b)
+                for b in data["buildings"]
+            ],
+        )
+
+    def update_from_input(self, input_source: InputSource) -> int:
         resources = int(input_source.next_line())
         num_travel_routes = int(input_source.next_line())
         transport_lines = []
@@ -109,34 +201,36 @@ class LunarMonthData:
             building_type = int(module_properties[0])
             module_id = int(module_properties[1])
             coordinates = int(module_properties[2]), int(module_properties[3])
+            module: Module
             if building_type == LANDING_PAD_BUILDING_TYPE:
-                num_astronauts = int(module_properties[4])
+                # int(module_properties[4])  # num_astronauts
                 astronauts = [
                     Astronaut(int(a_type)) for a_type in module_properties[5:]
                 ]
-                astronauts_type_map: dict[AstronautType, list[Astronaut]] = {}
-                for astronaut in astronauts:
-                    if astronaut.type not in astronauts_type_map:
-                        astronauts_type_map[astronaut.type] = []
-                    astronauts_type_map[astronaut.type].append(astronaut)
                 module = LandingPad(
                     building_type,
                     module_id,
                     coordinates,
                     astronauts,
-                    astronauts_type_map,
                 )
             else:
                 module = Module(building_type, module_id, coordinates)
 
             self.buildings.append(module)
-            if building_type not in self.buildings_type_map:
-                self.buildings_type_map[building_type] = []
-            self.buildings_type_map[building_type].append(module)
 
             self.transport_lines = transport_lines
             self.resources = resources
             self.pods = pods
+
+        for building in self.buildings:
+            self.buildings_by_type.setdefault(building.type, []).append(building)
+
+        return num_new_buildings
+
+    def get_building_coordinates(self) -> np.ndarray:
+        return np.array(
+            [building.coordinates for building in self.buildings], dtype=np.float64
+        )
 
 
 class ActionType(Enum):
@@ -153,6 +247,12 @@ class LunarDayAction:
         self.type = type
 
 
+def transport_line_cost(
+    coord1: tuple[float, float] | np.ndarray, coord2: tuple[float, float] | np.ndarray
+) -> int:
+    return int(np.floor(10 * np.linalg.norm(np.array(coord1) - np.array(coord2))))
+
+
 class CreateTube(LunarDayAction):
     """
     Cost is 1 resource per 0.1 km rounded down.
@@ -166,14 +266,14 @@ class CreateTube(LunarDayAction):
         self.building_id_2 = building_2.id
 
     def cost(self) -> int:
-        x1, y1 = self.building_1.coordinates
-        x2, y2 = self.building_2.coordinates
-        distance = math.sqrt(((x1 - x2) ** 2 + (y1 - y2) ** 2))
-        debug_print(
-            f"Distance: {distance} between {self.building_1.id} and {self.building_2.id} "
-            f"with coordinates {self.building_1.coordinates} and {self.building_2.coordinates}"
+        cost = transport_line_cost(
+            self.building_1.coordinates, self.building_2.coordinates
         )
-        return math.floor(distance * 0.1)
+        debug_print(
+            f"Line between {self.building_1.id} and {self.building_2.id} "
+            f"with coordinates {self.building_1.coordinates} and {self.building_2.coordinates} costs {cost}"
+        )
+        return cost
 
     def __str__(self) -> str:
         return f"{self.type.value} {self.building_id_1} {self.building_id_2}"
@@ -257,85 +357,155 @@ def send_actions(actions: list[LunarDayAction]) -> None:
     print(";".join([f"{str(action)}" for action in actions]))
 
 
-def get_path(Pr, i, j):
-    path = [j]
-    k = j
-    while Pr[i, k] != -9999:
-        path.append(Pr[i, k])
-        k = Pr[i, k]
-    return path[::-1]
+class GraphBuilder:
+    def __init__(self) -> None:
+        self.unbuilt_routes: list[tuple[Module, Module]] = []
+        self.graph: scipy.spatial.Delaunay | None = None
+        self.adjacency_matrix: np.ndarray | None = None
+        self.dist_matrix: np.ndarray | None = None
+        self.predecessors: np.ndarray | None = None
+        self.paths: list[list[int]] = []
+
+    def build_transport_lines(
+        self, data: LunarMonthData
+    ) -> list[tuple[Module, Module]]:
+        coordinates = data.get_building_coordinates()
+        self.graph = scipy.spatial.Delaunay(coordinates)
+        adjacency_matrix = self.delaunay_to_adjacency_matrix(
+            self.graph, transport_line_cost
+        )
+        landing_pads = data.buildings_by_type[LANDING_PAD_BUILDING_TYPE]
+        dist_matrix, predecessors = shortest_path(
+            adjacency_matrix, directed=False, method="FW", return_predecessors=True
+        )
+        self.dist_matrix = dist_matrix
+        self.predecessors = predecessors
+        self.adjacency_matrix = adjacency_matrix
+
+        route_indices_to_build: set[tuple[int, int]] = set()
+        for landing_pad in landing_pads:
+            assert isinstance(landing_pad, LandingPad)
+            self.paths = self.compute_all_paths(
+                adjacency_matrix, coordinates, dist_matrix, predecessors, landing_pad.id
+            )
+            for path in self.paths:
+                for i in range(len(path) - 1):
+                    route_indices_to_build.add((path[i], path[i + 1]))
+
+        routes_to_build = [
+            (data.buildings[building_id_1], data.buildings[building_id_2])
+            for building_id_1, building_id_2 in route_indices_to_build
+        ]
+        return routes_to_build
+
+    def compute_all_paths(
+        self,
+        adjacency_matrix: np.ndarray,
+        coordinates: np.ndarray,
+        dist_matrix: np.ndarray,
+        predecessors: np.ndarray,
+        origin_node: int,
+    ) -> list[list[int]]:
+        paths = []
+        for i in range(len(coordinates)):
+            if i == origin_node:
+                continue
+            if np.isinf(dist_matrix[origin_node, i]):
+                continue
+            path = self.get_path(adjacency_matrix, predecessors, origin_node, i)
+            paths.append(path)
+        return paths
+
+    def get_path(
+        self,
+        adjacency_matrix: np.ndarray,
+        predecessors: np.ndarray,
+        origin: int,
+        goal: int,
+    ) -> list[int]:
+        path = [goal]
+        k = goal
+        while predecessors[origin, k] != -9999:
+            path.append(predecessors[origin, k])
+            k = predecessors[origin, k]
+        cost = 0.0
+        for i in range(len(path) - 1):
+            cost += adjacency_matrix[path[i], path[i + 1]]
+        return path[::-1]
+
+    def delaunay_to_adjacency_matrix(
+        self,
+        delaunay: scipy.spatial.Delaunay,
+        cost_function: Callable[[np.ndarray, np.ndarray], float],
+    ) -> np.ndarray:
+        n = len(delaunay.points)
+        adjacency_matrix = np.full((n, n), np.inf)
+        for simplex in delaunay.simplices:
+            for i in range(len(simplex)):
+                for j in range(i + 1, len(simplex)):
+                    p1, p2 = simplex[i], simplex[j]
+                    dist = cost_function(delaunay.points[p1], delaunay.points[p2])
+                    adjacency_matrix[p1][p2] = dist
+                    adjacency_matrix[p2][p1] = dist
+
+        return adjacency_matrix
 
 
-def build_adjacency_matrix(coordinates: np.ndarray) -> np.ndarray:
-    n = len(coordinates)
-    adjacency_matrix = np.zeros((n, n))
+def create_all_possible_tubes(
+    remaining_resources: int,
+    routes_to_build: list[tuple[Module, Module]],
+) -> list[LunarDayAction]:
+    actions: list[LunarDayAction] = []
+    while len(routes_to_build) > 0:
+        route = routes_to_build.pop(0)
+        action = CreateTube(route[0], route[1])
+        cost = action.cost()
+        if remaining_resources < cost:
+            break
+        remaining_resources -= cost
+        actions.append(action)
+    return actions
 
-    for i in range(n):
-        for j in range(i + 1, n):
-            dist = np.linalg.norm(coordinates[i] - coordinates[j])
-            adjacency_matrix[i][j] = dist
-            adjacency_matrix[j][i] = dist
-
-    return adjacency_matrix
 
 def main() -> None:
     tick = 0
     schedule = []
 
     data = LunarMonthData()
+    graph_builder = GraphBuilder()
 
     while True:
-        data.update_from_input(LiveInputSource())
+        num_new_buildings = data.update_from_input(LiveInputSource())
         debug_print(f"Tick {tick}")
-        debug_print(data.resources)
-        debug_print(data.transport_lines)
+        debug_print(json.dumps(data.to_dict()))
 
         actions = []
 
-        if tick == 0:
-            coordinates = np.array(
-                [building.coordinates for building in data.buildings], dtype=np.float64
+        remaining_resources = data.resources
+        if num_new_buildings > 0:
+            routes_to_build = graph_builder.build_transport_lines(data)
+            tube_actions = create_all_possible_tubes(
+                remaining_resources, routes_to_build
             )
-            graph = scipy.spatial.Delaunay(coordinates)
+            actions.extend(tube_actions)
+            graph_builder.unbuilt_routes = routes_to_build
 
-            debug_print(f"graph {graph.simplices}")
+            debug_print(
+                f"Remaining resources: {remaining_resources}. {len(routes_to_build)} routes left to build."
+            )
+        else:
+            tube_actions = create_all_possible_tubes(
+                remaining_resources, graph_builder.unbuilt_routes
+            )
 
-            # landing_pads = data.buildings_type_map[LANDING_PAD_BUILDING_TYPE]
+        while remaining_resources > 0:
+            itinerary = [0, 1, 0, 2, 0, 1, 0, 2]
+            pod_action = CreatePod(1, itinerary)
+            remaining_resources = remaining_resources - POD_COST
+            actions.append(pod_action)
 
-            # # map of landing pad id to list of buildings its astronauts want to visit
-            # target_buildings_map: dict[BuildingId, list[Module]] = {}
-
-            # routes_to_build: list[tuple[Module, Module]] = []
-            # for landing_pad in landing_pads:
-            #     assert isinstance(landing_pad, LandingPad)
-            #     target_buildings_map[landing_pad.id] = []
-            #     for (
-            #         astronaut_type,
-            #         astronauts,
-            #     ) in landing_pad.astronauts_type_map.items():
-            #         target_buildings_map[landing_pad.id].extend(
-            #             data.buildings_type_map[astronaut_type]
-            #         )
-            #         for building in data.buildings_type_map[astronaut_type]:
-            #             routes_to_build.append((landing_pad, building))
-
-            # debug_print(target_buildings_map)
-            # debug_print(routes_to_build)
-
-            # remaining_resources = data.resources
-            # for idx, route in enumerate(routes_to_build):
-            #     action = CreateTube(route[0], route[1])
-            #     actions.append(action)
-            #     remaining_resources = remaining_resources - action.cost()
-
-            # debug_print(f"Remaining resources: {remaining_resources}")
-
-            # start with one pod
-            # if remaining_resources >= POD_COST:
-            #     itenerary = []
-            #     pod_action = CreatePod(1, itenerary)
-            #     remaining_resources = remaining_resources - POD_COST
-            #     actions.append(pod_action)
+        if remaining_resources < 0:
+            debug_print(f"Not enough resources for {actions.pop()}")
 
         schedule.append(actions)
 
