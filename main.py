@@ -1,4 +1,5 @@
 from __future__ import annotations
+import zlib
 import json
 import sys
 import scipy.spatial  # type: ignore
@@ -34,6 +35,29 @@ BuildingType = int
 
 LANDING_PAD_BUILDING_TYPE = 0
 POD_COST = 1000
+
+
+class IndexPair:
+    def __init__(self, index1: int, index2: int) -> None:
+        self.index1 = index1
+        self.index2 = index2
+
+    def __getitem__(self, index: int) -> int:
+        if index == 0:
+            return self.index1
+        elif index == 1:
+            return self.index2
+        raise IndexError(f"Index out of bounds: {index}")
+
+    def __eq__(self, other: Any) -> bool:
+        if not isinstance(other, IndexPair):
+            return False
+        return (self.index1 == other.index1 and self.index2 == other.index2) or (
+            self.index1 == other.index2 and self.index2 == other.index1
+        )
+
+    def __hash__(self) -> int:
+        return hash((self.index1, self.index2)) + hash((self.index2, self.index1))
 
 
 @dataclass
@@ -112,15 +136,24 @@ class LandingPad(Module):
         }
 
     def to_dict(self) -> dict:
-        return to_dict(self)
+        serialized = to_dict(self)
+        serialized["astronauts"] = {
+            type: len(astronauts)
+            for type, astronauts in self.astronauts_type_map.items()
+        }
+        return serialized
 
     @classmethod
     def from_dict(cls, data: dict) -> LandingPad:
+        astronaut_data = data["astronauts"]
+        astronauts = []
+        for type, count in astronaut_data.items():
+            astronauts.extend([Astronaut(int(type)) for _ in range(count)])
         return cls(
             int(data["type"]),
             int(data["id"]),
             (int(data["coordinates"][0]), int(data["coordinates"][1])),
-            [Astronaut(**a) for a in data["astronauts"]],
+            astronauts,
         )
 
 
@@ -159,7 +192,19 @@ class LunarMonthData:
             self.buildings_by_type.setdefault(building.type, []).append(building)
 
     def to_dict(self) -> dict:
-        return to_dict(self)
+        return {
+            "resources": self.resources,
+            "transport_lines": [t.to_dict() for t in self.transport_lines],
+            "pods": [p.to_dict() for p in self.pods],
+            "buildings": [b.to_dict() for b in self.buildings],
+        }
+    
+    def to_compressed_string(self) -> bytes:
+        return zlib.compress(json.dumps(self.to_dict()).encode("utf-8"))
+
+    @classmethod
+    def from_compressed_string(self, raw_data: bytes) -> LunarMonthData:
+        return self.from_dict(json.loads(zlib.decompress(raw_data).decode("utf-8")))
 
     @classmethod
     def from_dict(cls, data: dict) -> LunarMonthData:
@@ -398,7 +443,7 @@ class GraphBuilder:
         self.predecessors = predecessors
         self.adjacency_matrix = adjacency_matrix
 
-        route_indices_to_build: set[tuple[int, int]] = set()
+        route_indices_to_build: set[IndexPair] = set()
         for landing_pad in landing_pads:
             assert isinstance(landing_pad, LandingPad)
             self.paths = self.compute_all_paths(
@@ -406,7 +451,7 @@ class GraphBuilder:
             )
             for path in self.paths:
                 for i in range(len(path) - 1):
-                    route_indices_to_build.add((path[i], path[i + 1]))
+                    route_indices_to_build.add(IndexPair(path[i], path[i + 1]))
 
         routes_to_build = [
             (data.buildings[building_id_1], data.buildings[building_id_2])
@@ -493,7 +538,7 @@ def main() -> None:
     while True:
         num_new_buildings = data.update_from_input(LiveInputSource())
         debug_print(f"Tick {tick}")
-        debug_print(json.dumps(data.to_dict()))
+        debug_print(data.to_compressed_string())
 
         actions = []
 
