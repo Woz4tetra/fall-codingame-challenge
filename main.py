@@ -6,7 +6,7 @@ import scipy.spatial  # type: ignore
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, field
 from enum import Enum
-from typing import Any, Callable
+from typing import Any, Callable, Generator
 import numpy as np
 
 from scipy.sparse.csgraph import shortest_path  # type: ignore
@@ -49,6 +49,13 @@ class IndexPair:
             return self.index2
         raise IndexError(f"Index out of bounds: {index}")
 
+    def __len__(self) -> int:
+        return 2
+
+    def __iter__(self) -> Generator[int, None, None]:
+        yield self.index1
+        yield self.index2
+
     def __eq__(self, other: Any) -> bool:
         if not isinstance(other, IndexPair):
             return False
@@ -58,6 +65,11 @@ class IndexPair:
 
     def __hash__(self) -> int:
         return hash((self.index1, self.index2)) + hash((self.index2, self.index1))
+
+    def __str__(self) -> str:
+        return f"({self.index1}, {self.index2})"
+
+    __repr__ = __str__
 
 
 @dataclass
@@ -198,7 +210,7 @@ class LunarMonthData:
             "pods": [p.to_dict() for p in self.pods],
             "buildings": [b.to_dict() for b in self.buildings],
         }
-    
+
     def to_compressed_string(self) -> bytes:
         return zlib.compress(json.dumps(self.to_dict()).encode("utf-8"))
 
@@ -412,7 +424,6 @@ class GraphBuilder:
         self.adjacency_matrix: np.ndarray | None = None
         self.dist_matrix: np.ndarray | None = None
         self.predecessors: np.ndarray | None = None
-        self.paths: list[list[int]] = []
 
     def build_transport_lines(
         self, data: LunarMonthData
@@ -437,7 +448,7 @@ class GraphBuilder:
         )
         landing_pads = data.buildings_by_type[LANDING_PAD_BUILDING_TYPE]
         dist_matrix, predecessors = shortest_path(
-            adjacency_matrix, directed=False, method="FW", return_predecessors=True
+            adjacency_matrix, directed=False, method="auto", return_predecessors=True
         )
         self.dist_matrix = dist_matrix
         self.predecessors = predecessors
@@ -447,7 +458,7 @@ class GraphBuilder:
         for landing_pad in landing_pads:
             assert isinstance(landing_pad, LandingPad)
             self.paths = self.compute_all_paths(
-                adjacency_matrix, coordinates, dist_matrix, predecessors, landing_pad.id
+                coordinates, dist_matrix, predecessors, landing_pad.id
             )
             for path in self.paths:
                 for i in range(len(path) - 1):
@@ -461,7 +472,6 @@ class GraphBuilder:
 
     def compute_all_paths(
         self,
-        adjacency_matrix: np.ndarray,
         coordinates: np.ndarray,
         dist_matrix: np.ndarray,
         predecessors: np.ndarray,
@@ -473,25 +483,16 @@ class GraphBuilder:
                 continue
             if np.isinf(dist_matrix[origin_node, i]):
                 continue
-            path = self.get_path(adjacency_matrix, predecessors, origin_node, i)
+            path = self.get_path(predecessors, origin_node, i)
             paths.append(path)
         return paths
 
-    def get_path(
-        self,
-        adjacency_matrix: np.ndarray,
-        predecessors: np.ndarray,
-        origin: int,
-        goal: int,
-    ) -> list[int]:
+    def get_path(self, predecessors: np.ndarray, origin: int, goal: int) -> list[int]:
         path = [goal]
         k = goal
         while predecessors[origin, k] != NO_PREDECESSOR:
             path.append(predecessors[origin, k])
             k = predecessors[origin, k]
-        cost = 0.0
-        for i in range(len(path) - 1):
-            cost += adjacency_matrix[path[i], path[i + 1]]
         return path[::-1]
 
     def delaunay_to_adjacency_matrix(
@@ -517,8 +518,7 @@ def create_all_possible_tubes(
     routes_to_build: list[tuple[Module, Module]],
 ) -> list[LunarDayAction]:
     actions: list[LunarDayAction] = []
-    while len(routes_to_build) > 0:
-        route = routes_to_build.pop(0)
+    for route in routes_to_build:
         action = CreateTube(route[0], route[1])
         cost = action.cost()
         if remaining_resources < cost:
