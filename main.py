@@ -457,10 +457,10 @@ class GraphBuilder:
         route_indices_to_build: set[IndexPair] = set()
         for landing_pad in landing_pads:
             assert isinstance(landing_pad, LandingPad)
-            self.paths = self.compute_all_paths(
+            paths = self.compute_all_paths(
                 coordinates, dist_matrix, predecessors, landing_pad.id
             )
-            for path in self.paths:
+            for path in paths:
                 for i in range(len(path) - 1):
                     route_indices_to_build.add(IndexPair(path[i], path[i + 1]))
 
