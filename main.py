@@ -357,6 +357,9 @@ def send_actions(actions: list[LunarDayAction]) -> None:
     print(";".join([f"{str(action)}" for action in actions]))
 
 
+NO_PREDECESSOR = -9999
+
+
 class GraphBuilder:
     def __init__(self) -> None:
         self.unbuilt_routes: list[tuple[Module, Module]] = []
@@ -370,6 +373,19 @@ class GraphBuilder:
         self, data: LunarMonthData
     ) -> list[tuple[Module, Module]]:
         coordinates = data.get_building_coordinates()
+        if len(coordinates) <= 1:
+            return []
+        elif len(coordinates) == 2:
+            self.adjacency_matrix = np.array(
+                [
+                    [0, transport_line_cost(coordinates[0], coordinates[1])],
+                    [transport_line_cost(coordinates[0], coordinates[1]), 0],
+                ]
+            )
+            self.dist_matrix = self.adjacency_matrix
+            self.predecessors = np.array([[NO_PREDECESSOR, 1], [0, NO_PREDECESSOR]])
+            return [(data.buildings[0], data.buildings[1])]
+
         self.graph = scipy.spatial.Delaunay(coordinates)
         adjacency_matrix = self.delaunay_to_adjacency_matrix(
             self.graph, transport_line_cost
@@ -425,7 +441,7 @@ class GraphBuilder:
     ) -> list[int]:
         path = [goal]
         k = goal
-        while predecessors[origin, k] != -9999:
+        while predecessors[origin, k] != NO_PREDECESSOR:
             path.append(predecessors[origin, k])
             k = predecessors[origin, k]
         cost = 0.0
