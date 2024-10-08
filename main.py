@@ -11,6 +11,8 @@ import numpy as np
 
 from scipy.sparse.csgraph import shortest_path  # type: ignore
 
+np.set_printoptions(threshold=sys.maxsize)
+
 
 def debug_print(*args: Any, **kwargs: Any) -> None:
     print(*args, file=sys.stderr, **kwargs)
@@ -326,10 +328,10 @@ class CreateTube(LunarDayAction):
         cost = transport_line_cost(
             self.building_1.coordinates, self.building_2.coordinates
         )
-        debug_print(
-            f"Line between {self.building_1.id} and {self.building_2.id} "
-            f"with coordinates {self.building_1.coordinates} and {self.building_2.coordinates} costs {cost}"
-        )
+        # debug_print(
+        #     f"Line between {self.building_1.id} and {self.building_2.id} "
+        #     f"with coordinates {self.building_1.coordinates} and {self.building_2.coordinates} costs {cost}"
+        # )
         return cost
 
     def __str__(self) -> str:
@@ -499,6 +501,7 @@ class GraphBuilder:
         self,
         delaunay: scipy.spatial.Delaunay,
         cost_function: Callable[[np.ndarray, np.ndarray], float],
+        connection_limit: int = 5,
     ) -> np.ndarray:
         n = len(delaunay.points)
         adjacency_matrix = np.full((n, n), np.inf)
@@ -506,9 +509,15 @@ class GraphBuilder:
             for i in range(len(simplex)):
                 for j in range(i + 1, len(simplex)):
                     p1, p2 = simplex[i], simplex[j]
-                    dist = cost_function(delaunay.points[p1], delaunay.points[p2])
-                    adjacency_matrix[p1][p2] = dist
-                    adjacency_matrix[p2][p1] = dist
+                    cost = cost_function(delaunay.points[p1], delaunay.points[p2])
+                    adjacency_matrix[p1][p2] = cost
+                    adjacency_matrix[p2][p1] = cost
+        for row_index in range(len(adjacency_matrix)):
+            row = adjacency_matrix[row_index]
+            sorted_indices = np.argsort(row)
+            culled_connections = sorted_indices[connection_limit:]
+            adjacency_matrix[row_index, culled_connections] = np.inf
+            adjacency_matrix[culled_connections, row_index] = np.inf
 
         return adjacency_matrix
 
