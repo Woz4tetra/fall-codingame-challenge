@@ -485,7 +485,7 @@ class Graph:
         buildings = self.buildings_by_type.get(search_type, [])
         if len(buildings) == 0:
             return -1, float("inf")
-        building = np.random.choice(buildings)
+        building = np.random.choice(buildings)  # type: ignore
         return building.id, float(np.linalg.norm(self.coordinates[origin] - building.coordinates))
 
     def find_nearest_node_of_type(
@@ -723,9 +723,11 @@ def main() -> None:
                 f"Remaining resources: {remaining_resources}. {len(graph.routes_to_build)} routes left to build."
             )
         else:
+            debug_print(f"attempting to build {len(unbuilt_routes)} routes")
             tube_actions, remaining_resources = create_all_possible_tubes(
                 remaining_resources, unbuilt_routes
             )
+            actions.extend(tube_actions)
 
         if remaining_resources > 0 and time_remaining() > 0.1:
             debug_print(f"pods: {data.pods}: time_remaining(): {time_remaining()}")
