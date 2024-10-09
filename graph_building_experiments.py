@@ -1,10 +1,13 @@
 from matplotlib import pyplot as plt
 import numpy as np
+import time
 from main import (
     LANDING_PAD_BUILDING_TYPE,
     create_all_possible_tubes,
+    create_all_possible_pods,
     GraphBuilder,
     LunarMonthData,
+    get_pod_path_coordinates,
 )
 
 test_cases = dict(
@@ -14,11 +17,20 @@ test_cases = dict(
 
 data = LunarMonthData.from_compressed_string(test_cases["grid_tick_0"])
 graph_builder = GraphBuilder()
+t0 = time.perf_counter()
 graph = graph_builder.build_transport_lines(data)
-print(LunarMonthData.from_compressed_string(test_cases["grid_tick_0"]))
-
-paths = create_all_possible_tubes(1000000, graph.routes_to_build)
+t1 = time.perf_counter()
+paths = create_all_possible_tubes(int(1e10), graph.routes_to_build)
+t2 = time.perf_counter()
 coordinates = data.get_building_coordinates()
+pod_actions, remaining_resources = create_all_possible_pods(int(1e10), graph, [])
+t3 = time.perf_counter()
+
+
+print(f"Graph building: {t1 - t0:.6f}s")
+print(f"Tube building: {t2 - t1:.6f}s")
+print(f"Pod building: {t3 - t2:.6f}s")
+
 
 plt.gca().invert_yaxis()
 plt.plot(coordinates[:, 0], coordinates[:, 1], "o")
@@ -54,5 +66,10 @@ for building in data.buildings:
     if building.type != LANDING_PAD_BUILDING_TYPE:
         continue
     plt.plot(building.coordinates[0], building.coordinates[1], "ro", markersize=15)
+
+for pod_action in pod_actions:
+    pod_path = get_pod_path_coordinates(pod_action, data.buildings)
+    plt.plot(pod_path[:, 0], pod_path[:, 1], "g-")
+
 plt.legend()
 plt.show()
