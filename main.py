@@ -18,6 +18,7 @@ from scipy.sparse.csgraph import shortest_path  # type: ignore
 np.set_printoptions(threshold=sys.maxsize)
 ENABLE_DEBUG = False
 
+
 def debug_print(*args: Any, override: bool = False, **kwargs: Any) -> None:
     if ENABLE_DEBUG or override:
         print(*args, file=sys.stderr, **kwargs)
@@ -454,6 +455,11 @@ class TimeBudget:
         return time_limit - (time.perf_counter() - self.tick_start_time)
 
 
+class InfiniteTimeBudget(TimeBudget):
+    def time_remaining(self) -> float:
+        return float("inf")
+
+
 class Graph:
     def __init__(
         self,
@@ -476,7 +482,9 @@ class Graph:
         self.buildings_by_type = (
             buildings_by_type if buildings_by_type is not None else {}
         )
-        self.built_routes: list[IndexPair] = built_routes if built_routes is not None else []
+        self.built_routes: list[IndexPair] = (
+            built_routes if built_routes is not None else []
+        )
 
     def build_next_route(self) -> tuple[Module, Module]:
         route = self.routes_to_build.pop(0)
@@ -504,8 +512,10 @@ class Graph:
             k = next_k
             cost += self.dist_matrix[k, path[-1]]
         return path[::-1], cost
-    
-    def reversed_traverse_predecessors(self, origin: int, goal: int) -> tuple[list[int], float]:
+
+    def reversed_traverse_predecessors(
+        self, origin: int, goal: int
+    ) -> tuple[list[int], float]:
         path = [goal]
         k = goal
         cost = 0.0
@@ -586,7 +596,9 @@ class GraphBuilder:
         self.delaunay_graph: scipy.spatial.Delaunay | None = None
         self.is_incremental = False
 
-    def build_transport_lines(self, time_budget: TimeBudget, data: LunarMonthData, prev_graph: Graph) -> Graph:
+    def build_transport_lines(
+        self, time_budget: TimeBudget, data: LunarMonthData, prev_graph: Graph
+    ) -> Graph:
         coordinates = data.get_building_coordinates()
         if len(coordinates) <= 1:
             debug_print("No buildings to connect")
@@ -612,7 +624,9 @@ class GraphBuilder:
         prev_coordinates = prev_graph.coordinates
         if prev_coordinates.size == 0:
             prev_coordinates = np.zeros((0, 2))
-        new_coordinates = coordinates[~np.isin(coordinates, prev_coordinates).all(axis=1)]
+        new_coordinates = coordinates[
+            ~np.isin(coordinates, prev_coordinates).all(axis=1)
+        ]
         if len(new_coordinates) == 0:
             debug_print("No new buildings to connect")
             return prev_graph
@@ -646,7 +660,7 @@ class GraphBuilder:
             predecessors,
             coordinates,
             data.buildings_by_type,
-            prev_graph.built_routes
+            prev_graph.built_routes,
         )
 
         route_indices_to_build: list[IndexPair] = []

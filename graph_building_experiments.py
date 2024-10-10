@@ -4,6 +4,7 @@ import time
 from main import (
     LANDING_PAD_BUILDING_TYPE,
     Graph,
+    InfiniteTimeBudget,
     create_all_possible_tubes,
     create_all_possible_pods,
     GraphBuilder,
@@ -22,8 +23,9 @@ test_cases = dict(
 
 data = LunarMonthData.from_compressed_string(test_cases["grid_tick_0"])
 graph_builder = GraphBuilder()
+time_budget = InfiniteTimeBudget()
 t0 = time.perf_counter()
-graph = graph_builder.build_transport_lines(data, Graph([]))
+graph = graph_builder.build_transport_lines(time_budget, data, Graph([]))
 t1 = time.perf_counter()
 paths, remaining_resources = create_all_possible_tubes(int(100000), graph)
 print(f"remaining_resources: {remaining_resources}")
@@ -32,7 +34,7 @@ t2 = time.perf_counter()
 coordinates = data.get_building_coordinates()
 while len(graph.routes_to_build) > 0:
     graph.build_next_route()
-pod_actions, remaining_resources = create_all_possible_pods(int(1e10), graph, [])
+pod_actions, remaining_resources = create_all_possible_pods(time_budget, int(1e10), graph, [])
 t3 = time.perf_counter()
 
 
