@@ -1,15 +1,17 @@
 from __future__ import annotations
+import copy
+import random
 import time
 
-import zlib 
-import json 
-import sys 
+import zlib
+import json
+import sys
 import scipy.spatial  # type: ignore
-from abc import ABC, abstractmethod 
-from dataclasses import asdict, dataclass, field 
-from enum import Enum 
-from typing import Any, Callable, Generator 
-import numpy as np 
+from abc import ABC, abstractmethod
+from dataclasses import asdict, dataclass, field
+from enum import Enum
+from typing import Any, Callable, Generator
+import numpy as np
 
 from scipy.sparse.csgraph import shortest_path  # type: ignore
 
@@ -280,7 +282,6 @@ class LunarMonthData:
 
             self.buildings.append(module)
 
-
         for building in self.buildings:
             self.buildings_by_type.setdefault(building.type, []).append(building)
 
@@ -439,6 +440,19 @@ class Path:
             yield node
 
 
+class TimeBudget:
+    def __init__(self) -> None:
+        self.tick = 0
+        self.tick_start_time = 0.0
+
+    def time_remaining(self) -> float:
+        if self.tick == 0:
+            time_limit = 1.0
+        else:
+            time_limit = 0.5
+        return time_limit - (time.perf_counter() - self.tick_start_time)
+
+
 class Graph:
     def __init__(
         self,
@@ -460,19 +474,41 @@ class Graph:
         self.buildings_by_type = (
             buildings_by_type if buildings_by_type is not None else {}
         )
+        self.built_routes: list[IndexPair] = []
+
+    def build_next_route(self) -> tuple[Module, Module]:
+        route = self.routes_to_build.pop(0)
+        self.built_routes.append(IndexPair(route[0].id, route[1].id))
+        return route
 
     def get_landing_pads(self) -> list[LandingPad]:
         return self.buildings_by_type.get(LANDING_PAD_BUILDING_TYPE, [])  # type: ignore
 
-    def get_path(self, origin: int, goal: int) -> Path:
+    def get_path(self, origin: int, goal: int, include_built_only: bool) -> Path:
         path = [goal]
         k = goal
         cost = 0.0
+        debug_print(f"self.predecessors: {self.predecessors}")
         while self.predecessors[origin, k] != NO_PREDECESSOR:
             path.append(self.predecessors[origin, k])
-            k = self.predecessors[origin, k]
+            next_k = self.predecessors[origin, k]
+            if next_k == k:
+                break
+            k = next_k
             cost += self.dist_matrix[k, path[-1]]
-        return Path(path[::-1], cost)
+        debug_print(f"Path from {origin} to {goal}: {path}")
+
+        path = path[::-1]
+        if include_built_only:
+            trimmed_path = []
+            for i in range(len(path) - 1):
+                pair = IndexPair(path[i], path[i + 1])
+                if pair in self.built_routes:
+                    trimmed_path.append(path[i])
+            trimmed_path.append(path[-1])
+            path = trimmed_path
+
+        return Path(path, cost)
 
     def get_adjacent_buildings(self, building_id: BuildingId) -> list[BuildingId]:
         return [
@@ -481,16 +517,22 @@ class Graph:
             if not np.isinf(self.adjacency_matrix[building_id, i])
         ]
 
-    def find_random_node_of_type(self, origin: int, search_type: BuildingType) -> tuple[BuildingId, float]:
+    def find_random_node_of_type(
+        self, origin: int, search_type: BuildingType
+    ) -> tuple[BuildingId, float]:
         buildings = self.buildings_by_type.get(search_type, [])
         if len(buildings) == 0:
             return -1, float("inf")
         building = np.random.choice(buildings)  # type: ignore
-        return building.id, float(np.linalg.norm(self.coordinates[origin] - building.coordinates))
+        return building.id, float(
+            np.linalg.norm(self.coordinates[origin] - building.coordinates)
+        )
 
     def find_nearest_node_of_type(
         self, origin: int, search_type: BuildingType
     ) -> tuple[int, float]:
+        if origin >= len(self.coordinates):
+            return -1, float("inf")
         nearest_node = -1
         nearest_distance = float("inf")
         buildings = self.buildings_by_type.get(search_type, [])
@@ -506,9 +548,10 @@ class Graph:
 
 class GraphBuilder:
     def __init__(self) -> None:
-        pass
+        self.delaunay_graph: scipy.spatial.Delaunay | None = None
+        self.is_incremental = False
 
-    def build_transport_lines(self, data: LunarMonthData) -> Graph:
+    def build_transport_lines(self, data: LunarMonthData, prev_graph: Graph) -> Graph:
         coordinates = data.get_building_coordinates()
         if len(coordinates) <= 1:
             return Graph(
@@ -529,14 +572,36 @@ class GraphBuilder:
                 coordinates=coordinates,
                 buildings_by_type=data.buildings_by_type,
             )
-
-        self.graph = scipy.spatial.Delaunay(coordinates)
-        adjacency_matrix = self.delaunay_to_adjacency_matrix(
-            self.graph, transport_line_cost
+        prev_coordinates = prev_graph.coordinates
+        if prev_coordinates.size == 0:
+            prev_coordinates = np.zeros((0, 2))
+        new_coordinates = np.array(
+            [coord for coord in coordinates if coord not in prev_coordinates]
         )
+        if len(new_coordinates) == 0:
+            return prev_graph
+
+        if self.delaunay_graph is None:
+            self.is_incremental = len(coordinates) > 4
+            self.delaunay_graph = scipy.spatial.Delaunay(
+                coordinates, incremental=self.is_incremental
+            )
+        else:
+            if self.is_incremental:
+                self.delaunay_graph.add_points(new_coordinates)
+            else:
+                self.is_incremental = len(coordinates) > 4
+                self.delaunay_graph = scipy.spatial.Delaunay(
+                    coordinates, incremental=self.is_incremental
+                )
+        adjacency_matrix = self.delaunay_to_adjacency_matrix(
+            self.delaunay_graph, transport_line_cost
+        )
+        debug_print(f"Built adjacency matrix of shape {adjacency_matrix.shape}")
         dist_matrix, predecessors = shortest_path(
             adjacency_matrix, directed=False, method="auto", return_predecessors=True
         )
+        debug_print("Built shortest paths")
 
         graph = Graph(
             [],
@@ -547,18 +612,28 @@ class GraphBuilder:
             data.buildings_by_type,
         )
 
-        route_indices_to_build: set[IndexPair] = set()
+        route_indices_to_build: list[IndexPair] = []
+        route_indices_to_build_set: set[IndexPair] = set()
+        built_routes = set(prev_graph.built_routes)
         for landing_pad in graph.get_landing_pads():
+            debug_print(f"Building routes from landing pad {landing_pad.id}")
             assert isinstance(landing_pad, LandingPad)
             paths = self.compute_all_paths(graph, landing_pad.id)
             for path in paths:
                 for i in range(len(path) - 1):
-                    route_indices_to_build.add(IndexPair(path[i], path[i + 1]))
+                    pair = IndexPair(path[i], path[i + 1])
+                    if (
+                        pair not in route_indices_to_build_set
+                        and pair not in built_routes
+                    ):
+                        route_indices_to_build.append(pair)
+                        route_indices_to_build_set.add(pair)
 
         graph.routes_to_build = [
             (data.buildings[building_id_1], data.buildings[building_id_2])
             for building_id_1, building_id_2 in route_indices_to_build
         ]
+        debug_print(f"Built {len(graph.routes_to_build)} routes")
         return graph
 
     def compute_all_paths(self, graph: Graph, origin_node: int) -> list[Path]:
@@ -566,9 +641,14 @@ class GraphBuilder:
         for node in range(len(graph.coordinates)):
             if node == origin_node:
                 continue
+            if (
+                graph.dist_matrix.shape[0] <= origin_node
+                or graph.dist_matrix.shape[0] <= node
+            ):
+                continue
             if np.isinf(graph.dist_matrix[origin_node, node]):
                 continue
-            path = graph.get_path(origin_node, node)
+            path = graph.get_path(origin_node, node, include_built_only=False)
             paths.append(path)
         return paths
 
@@ -598,11 +678,11 @@ class GraphBuilder:
 
 
 def create_all_possible_tubes(
-    remaining_resources: int,
-    routes_to_build: list[tuple[Module, Module]],
-) -> tuple[list[LunarDayAction], int]:
-    actions: list[LunarDayAction] = []
-    for route in routes_to_build:
+    remaining_resources: int, graph: Graph
+) -> tuple[list[CreateTube], int]:
+    actions: list[CreateTube] = []
+    while len(graph.routes_to_build) > 0:
+        route = graph.build_next_route()
         action = CreateTube(route[0], route[1])
         cost = action.cost()
         if remaining_resources < cost:
@@ -616,12 +696,15 @@ def build_node_sequence(
     graph: Graph,
     search_types: list[BuildingType],
     origin_id: BuildingId,
-    node_sequence: list[BuildingId] = [],
-) -> list[int]:
+    node_sequence: list[BuildingId],
+    max_depth: int = 10,
+) -> None:
+    if len(node_sequence) >= max_depth:
+        return
     if len(node_sequence) == 0:
         node_sequence.append(origin_id)
     if len(search_types) == 0:
-        return node_sequence
+        return
     next_id = -1
     next_distance = float("inf")
     selected_type = 0
@@ -634,11 +717,10 @@ def build_node_sequence(
             next_distance = nearest_distance
             selected_type = building_type
     if next_id == -1:
-        return node_sequence
+        return
     node_sequence.append(next_id)
     search_types.remove(selected_type)
-    sequence = build_node_sequence(graph, search_types, next_id, node_sequence)
-    return sequence
+    build_node_sequence(graph, search_types, next_id, node_sequence)
 
 
 def next_pod_id(pods: list[Pod]) -> int:
@@ -646,35 +728,55 @@ def next_pod_id(pods: list[Pod]) -> int:
 
 
 def build_path_from_sequence(
-    graph: Graph, node_sequence: list[BuildingId]
+    graph: Graph, node_sequence: list[BuildingId], max_path_length: int = 20
 ) -> Path:
-    full_path = Path([], 0.0)
-    for prev_id, next_id in zip(node_sequence[:-1], node_sequence[1:]):
-        path = graph.get_path(prev_id, next_id)
-        if len(full_path) == 0:
-            nodes = path.nodes
-        else:
-            nodes = path.nodes[1:]
-        full_path.nodes.extend(nodes)
-        full_path.cost += path.cost
+    path_segments: list[Path] = []
+    for goal_id in node_sequence[1:]:
+        path = graph.get_path(node_sequence[0], goal_id, include_built_only=True)
+        debug_print(f"Path from {node_sequence[0]} to {goal_id}: {path}")
+        path_segments.append(path)
+
+    full_path = Path([path_segments[0][0]], 0.0)
+    for segment in path_segments:
+        full_path.nodes.extend(segment.nodes[1:])
+        full_path.cost += segment.cost
+        full_path.nodes.extend(segment.nodes[::-1][1:])
+        full_path.cost += segment.cost
+
+    if len(full_path) < max_path_length:
+        path_copy = copy.deepcopy(full_path)
+        while len(full_path) < max_path_length:
+            full_path.nodes.extend(path_copy.nodes[::-1][1:])
+            full_path.cost += path_copy.cost
+            full_path.nodes.extend(path_copy.nodes[1:])
+            full_path.cost += path_copy.cost
+
     return full_path
 
 
 def create_all_possible_pods(
-    remaining_resources: int, graph: Graph, existing_pods: list[Pod]
+    time_budget: TimeBudget,
+    remaining_resources: int,
+    graph: Graph,
+    existing_pods: list[Pod],
 ) -> tuple[list[CreatePod], int]:
     actions: list[CreatePod] = []
     pod_id = next_pod_id(existing_pods)
-    for landing_pad in graph.get_landing_pads():
-        # node_sequence = build_node_sequence(
-        #     graph, list(landing_pad.astronauts_type_map.keys()), landing_pad.id
-        # )
-        adjacent_buildings = graph.get_adjacent_buildings(landing_pad.id)
-        node_sequence = []
-        for building_id in adjacent_buildings:
-            node_sequence.append(landing_pad.id)
-            node_sequence.append(building_id)
+    landing_pads = graph.get_landing_pads()
+    debug_print(f"Creating pods for {len(landing_pads)} landing pads")
+    for landing_pad in landing_pads:
+        debug_print(f"Creating pod for landing pad {landing_pad.id}")
+        time_remaining = time_budget.time_remaining()
+        debug_print(f"Time remaining: {time_remaining}")
+        if time_budget.time_remaining() < 0.01:
+            break
+        node_sequence: list[BuildingId] = []
+        all_astro_types = list(landing_pad.astronauts_type_map.keys())
+        random.shuffle(all_astro_types)
+        build_node_sequence(graph, all_astro_types, landing_pad.id, node_sequence)
         path = build_path_from_sequence(graph, node_sequence)
+        if len(path) <= 1:
+            continue
         action = CreatePod(pod_id, path.nodes)
         pod_id += 1
         cost = action.cost()
@@ -692,47 +794,41 @@ def main() -> None:
     data = LunarMonthData()
     graph_builder = GraphBuilder()
     graph: Graph = Graph([], coordinates=np.array([]), buildings_by_type={})
-    unbuilt_routes: list[tuple[Module, Module]] = []
-    tick_start_time = 0.0
-
-    def time_remaining() -> float:
-        if tick == 0:
-            time_limit = 1.0
-        else:
-            time_limit = 0.5
-        return time_limit - (time.perf_counter() - tick_start_time)
+    time_budget = TimeBudget()
 
     while True:
-        tick_start_time = time.perf_counter()
+        time_budget.tick_start_time = time.perf_counter()
+        time_budget.tick = tick
         num_new_buildings = data.update_from_input(LiveInputSource())
         debug_print(f"Tick {tick}, resources: {data.resources}")
         # debug_print(data.to_compressed_string())
 
-        actions = []
+        actions: list[LunarDayAction] = []
 
         remaining_resources = data.resources
-        if num_new_buildings > 0:
-            graph = graph_builder.build_transport_lines(data)
-            tube_actions, remaining_resources = create_all_possible_tubes(
-                remaining_resources, graph.routes_to_build
-            )
-            actions.extend(tube_actions)
-            unbuilt_routes.extend(graph.routes_to_build)
+        if tick % 2 == 0:
+            if num_new_buildings > 0:
+                debug_print("Building new buildings")
+                graph = graph_builder.build_transport_lines(data, graph)
+                tube_actions, remaining_resources = create_all_possible_tubes(
+                    remaining_resources, graph
+                )
+                actions.extend(tube_actions)
 
-            debug_print(
-                f"Remaining resources: {remaining_resources}. {len(graph.routes_to_build)} routes left to build."
-            )
-        else:
-            debug_print(f"attempting to build {len(unbuilt_routes)} routes")
-            tube_actions, remaining_resources = create_all_possible_tubes(
-                remaining_resources, unbuilt_routes
-            )
-            actions.extend(tube_actions)
+                debug_print(
+                    f"Remaining resources: {remaining_resources}. {len(graph.routes_to_build)} routes left to build."
+                )
+            else:
+                debug_print(f"attempting to build {len(graph.routes_to_build)} routes")
+                tube_actions, remaining_resources = create_all_possible_tubes(
+                    remaining_resources - POD_COST, graph
+                )
+                remaining_resources += POD_COST
+                actions.extend(tube_actions)
 
-        if remaining_resources > 0 and time_remaining() > 0.1:
-            debug_print(f"pods: {data.pods}: time_remaining(): {time_remaining()}")
+        if remaining_resources > 0:
             pod_actions, remaining_resources = create_all_possible_pods(
-                remaining_resources, graph, data.pods
+                time_budget, remaining_resources, graph, data.pods
             )
             actions.extend(pod_actions)
 
